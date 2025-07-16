@@ -9,8 +9,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters,
-    JobQueue
+    filters
 )
 from web3 import Web3
 import aiohttp
@@ -22,24 +21,19 @@ CONFIG = {
     "EMOJI": "🦎",
     "MEDIA_URL": "",
     "MEDIA_FILE_ID": "",
-    "SOCIAL_LINKS": {
-        "dexscreener": "",
-        "twitter": "",
-        "website": "",
-        "instagram": "",
-        "tiktok": "",
-        "discord": "",
-        "linktree": ""
-    }
+    "SOCIAL_LINKS": {plat: "" for plat in [
+        "dexscreener","twitter","website",
+        "instagram","tiktok","discord","linktree"
+    ]}
 }
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
 w3 = Web3(Web3.HTTPProvider(os.getenv("HYPER_RPC", "https://rpc.hyperliquid.xyz/evm")))
 DEX_URL_TEMPLATE = "https://api.dexscreener.com/latest/dex/pairs/{chain}/{pair}"
 allowed_platforms = list(CONFIG["SOCIAL_LINKS"].keys())
-monitoring_job = None  # Will hold the JobQueue job instance
+monitoring_job = None  # will store the scheduled job
 
 # ===== HELPERS =====
 def main_menu():
@@ -49,9 +43,9 @@ def main_menu():
         [InlineKeyboardButton("Set Media",         callback_data="BTN_SET_MEDIA")],
         [InlineKeyboardButton("Manage Social",     callback_data="BTN_SOCIAL_MENU")],
         [InlineKeyboardButton("Show Config",       callback_data="BTN_SHOW_CONFIG")],
-        [InlineKeyboardButton("Start Monitor",     callback_data="BTN_START")],
-        [InlineKeyboardButton("Stop Monitor",      callback_data="BTN_STOP")],
-        [InlineKeyboardButton("Help",              callback_data="BTN_HELP")],
+        [InlineKeyboardButton("▶️ Start Monitor",   callback_data="BTN_START")],
+        [InlineKeyboardButton("⏹️ Stop Monitor",    callback_data="BTN_STOP")],
+        [InlineKeyboardButton("❓ Help",             callback_data="BTN_HELP")],
     ])
 
 def social_menu():
@@ -59,12 +53,12 @@ def social_menu():
     buttons.append([InlineKeyboardButton("↩️ Back", callback_data="BTN_BACK")])
     return InlineKeyboardMarkup(buttons)
 
-async def send_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
+async def send_menu(update_or_q, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ *Main Menu*"
     markup = main_menu()
 
-    if update_or_query.callback_query:
-        cq = update_or_query.callback_query
+    if update_or_q.callback_query:
+        cq = update_or_q.callback_query
         await cq.answer()
         try:
             await cq.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
@@ -72,7 +66,7 @@ async def send_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
             if "Message is not modified" not in str(e):
                 raise
     else:
-        await update_or_query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+        await update_or_q.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
 def fmt_k(x: float) -> str:
     return f"{x/1_000:.2f}K" if x >= 1_000 else f"{x:.2f}"
@@ -80,18 +74,17 @@ def fmt_k(x: float) -> str:
 def shorten(addr: str) -> str:
     return addr[:6] + "..." + addr[-4:]
 
-def render_emojis(usd_amount: float) -> str:
-    count = int(usd_amount // CONFIG["EMOJI_STEP_USD"])
+def render_emojis(usd: float) -> str:
+    count = int(usd // CONFIG["EMOJI_STEP_USD"])
     return CONFIG["EMOJI"] * min(count, 50)
 
-# ===== FETCH STATS =====
 async def fetch_stats() -> dict:
     if not CONFIG["PAIR_ADDRESS"]:
         return {"price":0,"liquidity":0,"mcap":0,"hype_price":0,"change24h":0}
     url = DEX_URL_TEMPLATE.format(chain=os.getenv("CHAIN_ID","256"), pair=CONFIG["PAIR_ADDRESS"])
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            data = await resp.json()
+    async with aiohttp.ClientSession() as s:
+        async with s.get(url) as r:
+            data = await r.json()
     p = data.get("pair", {})
     return {
         "price":      float(p.get("priceUsd", 0)),
@@ -145,26 +138,22 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
                     if socials:
                         caption += "\n\n" + " │ ".join(socials)
 
-                    # send media if set
+                    # send media
                     if CONFIG["MEDIA_FILE_ID"]:
-                        await context.bot.send_animation(
-                            chat_id=context.job.chat_id,
-                            animation=CONFIG["MEDIA_FILE_ID"]
-                        )
+                        await context.bot.send_animation(context.job.chat_id, CONFIG["MEDIA_FILE_ID"])
                     elif CONFIG["MEDIA_URL"]:
-                        url = CONFIG["MEDIA_URL"]
-                        low = url.lower()
+                        url = CONFIG["MEDIA_URL"]; low = url.lower()
                         if any(low.endswith(ext) for ext in ('.mp4','.mov','.mkv','.webm')):
-                            await context.bot.send_video(chat_id=context.job.chat_id, video=url)
+                            await context.bot.send_video(context.job.chat_id, url)
                         elif low.endswith('.gif'):
-                            await context.bot.send_animation(chat_id=context.job.chat_id, animation=url)
+                            await context.bot.send_animation(context.job.chat_id, url)
                         else:
-                            await context.bot.send_photo(chat_id=context.job.chat_id, photo=url)
+                            await context.bot.send_photo(context.job.chat_id, url)
 
-                    # finally send text
+                    # send text
                     await context.bot.send_message(
-                        chat_id=context.job.chat_id,
-                        text=caption,
+                        context.job.chat_id,
+                        caption,
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
@@ -172,43 +161,37 @@ async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
 # ===== CALLBACK HANDLER =====
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitoring_job
-    cq = update.callback_query
-    data = cq.data
+    cq = update.callback_query; data = cq.data
     await cq.answer()
     context.user_data.pop("expecting", None)
 
     if data == "BTN_SET_PAIR":
         context.user_data["expecting"] = "PAIR"
-        await cq.message.reply_markdown("🔹 Send token pair contract address now.")
+        await cq.message.reply_markdown("🔹 Send pair contract address")
     elif data == "BTN_SET_STEP":
         context.user_data["expecting"] = "STEP"
-        await cq.message.reply_markdown("🔹 Send USD per emoji (e.g. `1`).")
+        await cq.message.reply_markdown("🔹 Send USD per emoji (e.g. `1`)")
     elif data == "BTN_SET_MEDIA":
         context.user_data["expecting"] = "MEDIA"
-        await cq.message.reply_markdown("🔹 Send URL or upload media; type `none` to clear.")
+        await cq.message.reply_markdown("🔹 Send URL or upload media, or `none` to clear")
     elif data == "BTN_SOCIAL_MENU":
-        await cq.edit_message_text(
-            "🔗 Select platform to configure:",
-            reply_markup=social_menu(),
-            parse_mode="Markdown"
-        )
+        await cq.edit_message_text("🔗 Choose platform:", reply_markup=social_menu(), parse_mode="Markdown")
         return
     elif data.startswith("SOCIAL_"):
         plat = data.split("_",1)[1]
         context.user_data["expecting"] = f"SOCIAL_{plat}"
-        await cq.message.reply_markdown(f"🔹 Send URL for *{plat.title()}*.")
+        await cq.message.reply_markdown(f"🔹 Send URL for *{plat.title()}*")
     elif data == "BTN_BACK":
         await send_menu(update, context)
         return
     elif data == "BTN_SHOW_CONFIG":
-        conf = CONFIG.copy()
-        conf["PAIR_ADDRESS"] = conf["PAIR_ADDRESS"] or "_Not set_"
+        conf = CONFIG.copy(); conf["PAIR_ADDRESS"] = conf["PAIR_ADDRESS"] or "_Not set_"
         await cq.message.reply_text("📋 Config:\n" + json.dumps(conf, indent=2))
     elif data == "BTN_START":
         if monitoring_job:
             await cq.message.reply_text("⚠️ Already monitoring.")
         else:
-            monitoring_job = context.job_queue.run_repeating(
+            monitoring_job = context.application.job_queue.run_repeating(
                 monitor_loop, interval=5, first=0, chat_id=update.effective_chat.id
             )
             await cq.message.reply_text("✅ Monitoring started.")
@@ -224,9 +207,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_menu(update, context)
         return
     elif data == "BTN_HELP":
-        await cq.message.reply_markdown(
-            "🛠 *Help*:\nUse buttons to configure and control the bot."
-        )
+        await cq.message.reply_markdown("🛠 *Help*: Use buttons to configure/control")
 
     await send_menu(update, context)
 
@@ -235,10 +216,10 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if msg.animation:
         CONFIG["MEDIA_FILE_ID"], CONFIG["MEDIA_URL"] = msg.animation.file_id, ""
-        await msg.reply_text("✅ Uploaded GIF set.")
+        await msg.reply_text("✅ GIF uploaded.")
     elif msg.photo:
         CONFIG["MEDIA_FILE_ID"], CONFIG["MEDIA_URL"] = msg.photo[-1].file_id, ""
-        await msg.reply_text("✅ Uploaded photo set.")
+        await msg.reply_text("✅ Photo uploaded.")
     else:
         return
     context.user_data.pop("expecting", None)
@@ -247,7 +228,7 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== TEXT HANDLER =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expect = context.user_data.get("expecting")
-    text = update.message.text.strip()
+    text   = update.message.text.strip()
 
     if expect == "PAIR":
         CONFIG["PAIR_ADDRESS"] = text.lower()
@@ -256,19 +237,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             CONFIG["EMOJI_STEP_USD"] = float(text)
             await update.message.reply_markdown(f"✅ Emoji step set to *${text}*")
-        except ValueError:
-            return await update.message.reply_text("❌ Invalid number.")
+        except: return await update.message.reply_text("❌ Invalid number")
     elif expect == "MEDIA":
-        if text.lower() == "none":
+        if text.lower()=="none":
             CONFIG["MEDIA_URL"], CONFIG["MEDIA_FILE_ID"] = "", ""
-            await update.message.reply_text("✅ Media cleared.")
+            await update.message.reply_text("✅ Media cleared")
         else:
             CONFIG["MEDIA_URL"], CONFIG["MEDIA_FILE_ID"] = text, ""
             await update.message.reply_text(f"✅ Media URL set to {text}")
     elif expect and expect.startswith("SOCIAL_"):
         plat = expect.split("_",1)[1]
         CONFIG["SOCIAL_LINKS"][plat] = text
-        await update.message.reply_text(f"✅ {plat.title()} link set.")
+        await update.message.reply_text(f"✅ {plat.title()} link set")
     else:
         return
 
@@ -280,7 +260,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", send_menu))
     app.add_handler(CallbackQueryHandler(button_router))
-    app.add_handler(MessageHandler(filters.ANIMATION | filters.PHOTO, media_handler))
+    app.add_handler(MessageHandler(filters.ANIMATION|filters.PHOTO, media_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.run_polling()
 
