@@ -37,7 +37,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 w3 = Web3(Web3.HTTPProvider(os.getenv("HYPER_RPC", "https://rpc.hyperliquid.xyz/evm")))
 DEX_URL_TEMPLATE = "https://api.dexscreener.com/latest/dex/pairs/{chain}/{pair}"
 
-allowed_platforms = set(CONFIG["SOCIAL_LINKS"].keys())
+allowed_platforms = list(CONFIG["SOCIAL_LINKS"].keys())
 monitoring_task = None
 
 # ===== HELPERS =====
@@ -46,12 +46,20 @@ def main_menu():
         [InlineKeyboardButton("Set Pair Address", callback_data="BTN_SET_PAIR")],
         [InlineKeyboardButton("Set Emoji Step", callback_data="BTN_SET_STEP")],
         [InlineKeyboardButton("Set Media", callback_data="BTN_SET_MEDIA")],
-        [InlineKeyboardButton("Social Links", callback_data="BTN_SHOW_SOCIAL")],
+        [InlineKeyboardButton("Manage Social Links", callback_data="BTN_SOCIAL_MENU")],
         [InlineKeyboardButton("Show Config", callback_data="BTN_SHOW_CONFIG")],
         [InlineKeyboardButton("Start Monitor", callback_data="BTN_START")],
         [InlineKeyboardButton("Stop Monitor", callback_data="BTN_STOP")],
         [InlineKeyboardButton("Help", callback_data="BTN_HELP")],
     ]
+    return InlineKeyboardMarkup(buttons)
+
+def social_menu():
+    # one button per platform, plus back
+    buttons = [
+        [InlineKeyboardButton(p.title(), callback_data=f"SOCIAL_{p}")]
+        for p in allowed_platforms
+    ] + [[InlineKeyboardButton("↩️ Back", callback_data="BTN_BACK")]]
     return InlineKeyboardMarkup(buttons)
 
 async def send_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
@@ -98,11 +106,26 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-    elif data == "BTN_SHOW_SOCIAL":
-        text = "🔗 *Social Links:*\n"
-        for p, v in CONFIG["SOCIAL_LINKS"].items():
-            text += f"- *{p.title()}:* {v or '_Not set_'}\n"
-        await cq.message.reply_markdown(text)
+    elif data == "BTN_SOCIAL_MENU":
+        await cq.edit_message_text(
+            "🔗 *Select platform to configure:*",
+            reply_markup=social_menu(),
+            parse_mode="Markdown"
+        )
+        return  # skip re-showing main menu here
+
+    elif data.startswith("SOCIAL_"):
+        platform = data.split("_", 1)[1]
+        context.user_data["expecting"] = f"SOCIAL_{platform}"
+        await cq.message.reply_text(
+            f"🔹 Please send the URL for *{platform.title()}* link now.",
+            parse_mode="Markdown"
+        )
+
+    elif data == "BTN_BACK":
+        # go back to main menu
+        await send_menu(update, context)
+        return
 
     elif data == "BTN_SHOW_CONFIG":
         conf = CONFIG.copy()
@@ -111,11 +134,11 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "BTN_START":
         await cq.message.reply_text("✅ Monitoring started (use the menu to stop).")
-        # TODO: insert your monitoring start logic here
+        # TODO: monitoring start logic
 
     elif data == "BTN_STOP":
         await cq.message.reply_text("🛑 Monitoring stopped.")
-        # TODO: insert your monitoring stop logic here
+        # TODO: monitoring stop logic
 
     elif data == "BTN_HELP":
         await cq.message.reply_markdown(
@@ -169,6 +192,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             CONFIG["MEDIA_URL"] = text
             CONFIG["MEDIA_FILE_ID"] = ""
             await update.message.reply_text(f"✅ Media URL set to {text}")
+
+    elif expect and expect.startswith("SOCIAL_"):
+        platform = expect.split("_", 1)[1]
+        CONFIG["SOCIAL_LINKS"][platform] = text
+        await update.message.reply_text(f"✅ {platform.title()} link set to {text}")
 
     else:
         return
