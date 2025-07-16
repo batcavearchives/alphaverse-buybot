@@ -58,19 +58,17 @@ async def send_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ *Main Menu*"
     markup = main_menu()
 
-    # If this is a callback query, edit in-place
     if hasattr(update_or_query, "callback_query") and update_or_query.callback_query:
         cq = update_or_query.callback_query
         await cq.answer()
         try:
             await cq.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
         except BadRequest as e:
-            # ignore “Message is not modified” errors
             if "Message is not modified" not in str(e):
                 raise
     else:
-        # Otherwise send a fresh message
         await update_or_query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
 
 # ===== CALLBACK HANDLER =====
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,7 +79,10 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "BTN_SET_PAIR":
         context.user_data["expecting"] = "PAIR"
-        await cq.message.reply_text("🔹 Please send the token *pair contract address* now.", parse_mode="Markdown")
+        await cq.message.reply_text(
+            "🔹 Please send the token *pair contract address* now.",
+            parse_mode="Markdown"
+        )
 
     elif data == "BTN_SET_STEP":
         context.user_data["expecting"] = "STEP"
@@ -110,11 +111,11 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "BTN_START":
         await cq.message.reply_text("✅ Monitoring started (use the menu to stop).")
-        # Insert your monitoring start logic here...
+        # TODO: insert your monitoring start logic here
 
     elif data == "BTN_STOP":
         await cq.message.reply_text("🛑 Monitoring stopped.")
-        # Insert your monitoring stop logic here...
+        # TODO: insert your monitoring stop logic here
 
     elif data == "BTN_HELP":
         await cq.message.reply_markdown(
@@ -125,7 +126,25 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_menu(update, context)
 
-# ===== MESSAGE HANDLER FOR RESPONSES =====
+
+# ===== MEDIA HANDLER =====
+async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if msg.animation:
+        CONFIG["MEDIA_FILE_ID"] = msg.animation.file_id
+        CONFIG["MEDIA_URL"] = ""
+        await msg.reply_text("✅ Uploaded GIF set for alerts.")
+    elif msg.photo:
+        CONFIG["MEDIA_FILE_ID"] = msg.photo[-1].file_id
+        CONFIG["MEDIA_URL"] = ""
+        await msg.reply_text("✅ Uploaded photo set for alerts.")
+    else:
+        return
+    context.user_data.pop("expecting", None)
+    await send_menu(update, context)
+
+
+# ===== TEXT HANDLER FOR RESPONSES =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expect = context.user_data.get("expecting")
     text = update.message.text.strip()
@@ -152,10 +171,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Media URL set to {text}")
 
     else:
-        return  # ignore unrelated messages
+        return
 
     context.user_data.pop("expecting", None)
     await send_menu(update, context)
+
 
 # ===== MAIN =====
 def main():
@@ -163,9 +183,11 @@ def main():
 
     app.add_handler(CommandHandler("start", send_menu))
     app.add_handler(CallbackQueryHandler(button_router))
+    app.add_handler(MessageHandler(filters.ANIMATION | filters.PHOTO, media_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
