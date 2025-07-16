@@ -255,4 +255,40 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expect = context.user_data.get("expecting")
     text   = update.message.text.strip()
 
-    if expect == "PAI
+    if expect == "PAIR":
+        CONFIG["PAIR_ADDRESS"] = text.lower()
+        await update.message.reply_markdown(f"✅ Pair set to `{text}`")
+    elif expect == "STEP":
+        try:
+            CONFIG["EMOJI_STEP_USD"] = float(text)
+            await update.message.reply_markdown(f"✅ Emoji step set to *${text}*")
+        except:
+            await update.message.reply_text("❌ Invalid number.")
+    elif expect == "MEDIA":
+        if text.lower()=="none":
+            CONFIG["MEDIA_URL"], CONFIG["MEDIA_FILE_ID"] = "", ""
+            await update.message.reply_text("✅ Media cleared.")
+        else:
+            CONFIG["MEDIA_URL"], CONFIG["MEDIA_FILE_ID"] = text, ""
+            await update.message.reply_text(f"✅ Media URL set to {text}")
+    elif expect and expect.startswith("SOCIAL_"):
+        plat = expect.split("_",1)[1]
+        CONFIG["SOCIAL_LINKS"][plat] = text
+        await update.message.reply_text(f"✅ {plat.title()} link set.")
+    else:
+        return
+
+    context.user_data.pop("expecting", None)
+    await send_menu(update, context)
+
+# ===== MAIN =====
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", send_menu))
+    app.add_handler(CallbackQueryHandler(button_router))
+    app.add_handler(MessageHandler(filters.ANIMATION | filters.PHOTO, media_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
