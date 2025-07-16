@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -55,12 +56,21 @@ def main_menu():
 
 async def send_menu(update_or_query, context: ContextTypes.DEFAULT_TYPE):
     text = "⚙️ *Main Menu*"
+    markup = main_menu()
+
+    # If this is a callback query, edit in-place
     if hasattr(update_or_query, "callback_query") and update_or_query.callback_query:
         cq = update_or_query.callback_query
         await cq.answer()
-        await cq.edit_message_text(text, reply_markup=main_menu(), parse_mode="Markdown")
+        try:
+            await cq.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        except BadRequest as e:
+            # ignore “Message is not modified” errors
+            if "Message is not modified" not in str(e):
+                raise
     else:
-        await update_or_query.message.reply_text(text, reply_markup=main_menu(), parse_mode="Markdown")
+        # Otherwise send a fresh message
+        await update_or_query.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
 # ===== CALLBACK HANDLER =====
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,11 +110,11 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "BTN_START":
         await cq.message.reply_text("✅ Monitoring started (use the menu to stop).")
-        # hook into your existing monitoring start logic here...
+        # Insert your monitoring start logic here...
 
     elif data == "BTN_STOP":
         await cq.message.reply_text("🛑 Monitoring stopped.")
-        # hook into your existing monitoring stop logic here...
+        # Insert your monitoring stop logic here...
 
     elif data == "BTN_HELP":
         await cq.message.reply_markdown(
