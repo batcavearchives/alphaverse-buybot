@@ -17,15 +17,20 @@ import aiohttp
 # ===== CONFIG & STATE =====
 CHAM_TOKEN = "0x2c9634d152e8b584d4a153a78dba3e958db7b385".lower()
 CONFIG = {
-    "PAIR_ADDRESS": "",          # set via button flow
+    "PAIR_ADDRESS": "",
     "EMOJI_STEP_USD": 1.0,
     "EMOJI": "🦎",
     "MEDIA_URL": "",
     "MEDIA_FILE_ID": "",
-    "SOCIAL_LINKS": {plat: "" for plat in [
-        "dexscreener","twitter","website",
-        "instagram","tiktok","discord","linktree"
-    ]}
+    "SOCIAL_LINKS": {
+        "dexscreener": "",
+        "twitter": "",
+        "website": "",
+        "instagram": "",
+        "tiktok": "",
+        "discord": "",
+        "linktree": ""
+    }
 }
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_TOKEN:
@@ -34,7 +39,7 @@ if not TELEGRAM_TOKEN:
 w3 = Web3(Web3.HTTPProvider(os.getenv("HYPER_RPC", "https://rpc.hyperliquid.xyz/evm")))
 DEX_URL_TEMPLATE = "https://api.dexscreener.com/latest/dex/pairs/{chain}/{pair}"
 allowed_platforms = list(CONFIG["SOCIAL_LINKS"].keys())
-monitoring_job = None
+monitoring_job = None  # will store the JobQueue job
 
 # ===== HELPERS =====
 def main_menu() -> InlineKeyboardMarkup:
@@ -96,99 +101,65 @@ async def fetch_pair_data() -> dict:
         "token1":     pair.get("token1", {}),
     }
 
-# ===== MONITOR LOOP WITH DEBUG & AUTO‑DETECT =====
+# ===== MONITOR LOOP WITH DEBUG =====
 async def monitor_loop(context: ContextTypes.DEFAULT_TYPE):
+    print("🕵️‍♂️ monitor_loop invoked")
     data = await fetch_pair_data()
+    print("   Pair data:", data)
     if not data:
-        print("⚠️ No pair address configured.")
+        print("   ⚠️ No pair configured; skipping")
         return
 
-    # detect CHAM index
+    # auto-detect CHAM index
     if data["token0"].get("address","").lower() == CHAM_TOKEN:
-        cham_idx, other_idx = 0, 1
+        cham_idx = 0
+        other_idx = 1
     elif data["token1"].get("address","").lower() == CHAM_TOKEN:
-        cham_idx, other_idx = 1, 0
+        cham_idx = 1
+        other_idx = 0
     else:
-        print("⚠️ CHAM token not in pool metadata.")
+        print("   ⚠️ CHAM not found in token0/token1; check PAIR_ADDRESS")
         return
 
     block = w3.eth.get_block("latest", full_transactions=True)
-    print(f"🔎 Scanning block {block.number} ({len(block.transactions)} txs)")
+    print(f"   Scanning block {block.number}, tx count = {len(block.transactions)}")
+
     for tx in block.transactions:
         receipt = w3.eth.get_transaction_receipt(tx.hash)
         for log in receipt.logs:
             if log.address.lower() != CONFIG["PAIR_ADDRESS"].lower():
                 continue
-            print("  ➡️ Swap on pair:", tx.hash.hex())
+            print("     🔄 Swap event on pair:", tx.hash.hex())
+
             try:
                 amt0_in, amt1_in, amt0_out, amt1_out = w3.codec.decode(
                     ['uint256','uint256','uint256','uint256'], log.data
                 )
             except Exception as e:
-                print("   decode error:", e)
+                print("       ❌ Decode error:", e)
                 continue
-            print(f"   raw in0:{amt0_in} in1:{amt1_in} out0:{amt0_out} out1:{amt1_out}")
+            print("       amounts:", amt0_in, amt1_in, amt0_out, amt1_out)
 
-            out_amt = amt0_out if cham_idx==0 else amt1_out
-            in_amt  = amt1_in  if cham_idx==0 else amt0_in
+            # determine buy side
+            out_amt = amt0_out if cham_idx == 0 else amt1_out
+            in_amt  = amt1_in  if cham_idx == 0 else amt0_in
 
             if out_amt > 0:
                 hype_amt = w3.from_wei(in_amt, 'ether')
-                cham_amt = w3.from_wei(out_amt,'ether')
+                cham_amt = w3.from_wei(out_amt, 'ether')
                 usd_cost = hype_amt * data["hype_price"]
-                buyer    = w3.to_checksum_address("0x"+log.topics[2].hex()[26:])
+                buyer    = w3.to_checksum_address("0x" + log.topics[2].hex()[26:])
                 pct      = data["change24h"]
-                print(f"   🎉 BUY detected: {cham_amt:.4f} CHAM for {hype_amt:.4f} ≃ ${usd_cost:.2f}")
 
-                # build alert
-                caption = (
-                    "CHAM Buy!\n\n"
-                    f"{render_emojis(usd_cost)}\n\n"
-                    f"💵 {hype_amt:.2f} HYPE (${usd_cost:.2f})\n"
-                    f"💰 {fmt_k(cham_amt)} CHAM\n\n"
-                    f"[{shorten(buyer)}]"
-                    f"(https://hyperevmscan.io/address/{buyer}) +{pct:.1f}% │ "
-                    f"[Txn](https://hyperevmscan.io/tx/{tx.hash.hex()})\n"
-                    f"Price: ${data['price']:.6f}\n"
-                    f"Liquidity: ${data['liquidity']/1_000:,.2f}K\n"
-                    f"MCap: ${data['mcap']/1_000:,.2f}K\n"
-                    f"HYPE Price: ${data['hype_price']:.4f}"
-                )
+                print(f"       🎉 BUY detected: {cham_amt:.4f} CHAM for {hype_amt:.4f} HYPE (~${usd_cost:.2f})")
 
-                # append socials
-                socials = []
-                for plat, url in CONFIG["SOCIAL_LINKS"].items():
-                    if url:
-                        label = "DexS" if plat=="dexscreener" else plat.title()
-                        socials.append(f"[{label}]({url})")
-                if socials:
-                    caption += "\n\n" + " │ ".join(socials)
-
-                # send media if any
-                if CONFIG["MEDIA_FILE_ID"]:
-                    await context.bot.send_animation(chat_id=context.job.chat_id,
-                                                     animation=CONFIG["MEDIA_FILE_ID"])
-                elif CONFIG["MEDIA_URL"]:
-                    low = CONFIG["MEDIA_URL"].lower()
-                    if any(low.endswith(ext) for ext in ('.mp4','.mov','.mkv','.webm')):
-                        await context.bot.send_video(chat_id=context.job.chat_id,
-                                                     video=CONFIG["MEDIA_URL"])
-                    elif low.endswith('.gif'):
-                        await context.bot.send_animation(chat_id=context.job.chat_id,
-                                                         animation=CONFIG["MEDIA_URL"])
-                    else:
-                        await context.bot.send_photo(chat_id=context.job.chat_id,
-                                                     photo=CONFIG["MEDIA_URL"])
-
-                # final alert
+                # debug message instead of real alert
                 await context.bot.send_message(
                     chat_id=context.job.chat_id,
-                    text=caption,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True
+                    text=f"Debug: would now send BUY alert for {cham_amt:.2f} CHAM",
                 )
 
-# ===== HANDLERS =====
+# ===== CALLBACK HANDLER =====
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global monitoring_job
     cq = update.callback_query; data = cq.data
@@ -238,6 +209,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_menu(update, context)
 
+# ===== MEDIA HANDLER =====
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     if msg.animation:
@@ -251,9 +223,10 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("expecting", None)
     await send_menu(update, context)
 
+# ===== TEXT HANDLER =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expect = context.user_data.get("expecting")
-    text   = update.message.text.strip()
+    text = update.message.text.strip()
 
     if expect == "PAIR":
         CONFIG["PAIR_ADDRESS"] = text.lower()
@@ -262,10 +235,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             CONFIG["EMOJI_STEP_USD"] = float(text)
             await update.message.reply_markdown(f"✅ Emoji step set to *${text}*")
-        except:
+        except ValueError:
             await update.message.reply_text("❌ Invalid number.")
     elif expect == "MEDIA":
-        if text.lower()=="none":
+        if text.lower() == "none":
             CONFIG["MEDIA_URL"], CONFIG["MEDIA_FILE_ID"] = "", ""
             await update.message.reply_text("✅ Media cleared.")
         else:
