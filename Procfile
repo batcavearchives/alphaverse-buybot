@@ -1,1 +1,1 @@
-worker: python cham_buy_tracker.py
+worker: python buybot.py
